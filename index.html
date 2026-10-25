@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visualización del Catálogo de Satélites - Árbol Hiperbólico Radial</title>
+    <!-- Importamos la librería oficial D3.js desde su CDN -->
+    <script src="https://d3js.org"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #0b0f19;
+            color: #f3f4f6;
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+        h1 {
+            font-size: 22px;
+            margin-top: 20px;
+            margin-bottom: 5px;
+            color: #60a5fa;
+            text-shadow: 0 0 10px rgba(96, 165, 250, 0.3);
+        }
+        p {
+            font-size: 13px;
+            color: #9ca3af;
+            margin-bottom: 20px;
+        }
+        #canvas-container {
+            width: 90vw;
+            height: 80vh;
+            background: #111827;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.7);
+            border: 1px solid #1f2937;
+        }
+        .node circle {
+            fill: #3b82f6;
+            stroke: #60a5fa;
+            stroke-width: 1.5px;
+            cursor: pointer;
+            transition: fill 0.3s, r 0.3s;
+        }
+        .node--internal circle {
+            fill: #10b981;
+            stroke: #34d399;
+            stroke-width: 2px;
+        }
+        .node--leaf circle {
+            fill: #6366f1;
+            stroke: #818cf8;
+            r: 2.5px; /* Nodos de satélites individuales pequeños para evitar colapsar */
+        }
+        .node:hover circle {
+            fill: #ef4444 !important;
+            r: 7px;
+        }
+        .link {
+            fill: none;
+            stroke: #374151;
+            stroke-width: 1px;
+            stroke-opacity: 0.4;
+        }
+        .text-label {
+            font-size: 10px;
+            fill: #e5e7eb;
+            pointer-events: none;
+            font-weight: 500;
+        }
+        /* Tooltip flotante interactivo */
+        .tooltip {
+            position: absolute;
+            padding: 8px 12px;
+            background: rgba(17, 24, 39, 0.95);
+            border: 1px solid #4b5563;
+            color: #fff;
+            border-radius: 6px;
+            font-size: 12px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Ecosistema Global de Satélites Activos</h1>
+    <p>Visualización jerárquica radial (Proyección hiperbólica). Haz clic en los nodos verdes para expandir/contraer las constelaciones.</p>
+
+    <div id="canvas-container"></div>
+    <div id="tooltip" class="tooltip"></div>
+
+    <script>
+        // Dimensions del contenedor
+        const container = d3.select("#canvas-container").node();
+        const width = container.getBoundingClientRect().width;
+        const height = container.getBoundingClientRect().height;
+        const radius = Math.min(width, height) / 2 - 80; // Radio del plano circular
+
+        // Crear el lienzo SVG con propiedades de zoom y arrastre (Pan & Zoom)
+        const svg = d3.select("#canvas-container")
+            .append("svg")
+            .attr("width", width)
+            .attr("height", height)
+            .append("g")
+            .attr("transform", `translate(${width / 2},${height / 2})`);
+
+        // Añadir comportamiento de zoom para poder explorar la periferia densa
+        const zoom = d3.zoom()
+            .scaleExtent([0.5, 8])
+            .on("zoom", (event) => {
+                svg.attr("transform", event.transform);
+            });
+        
+        d3.select("svg").call(zoom).call(zoom.transform, d3.zoomIdentity.translate(width/2, height/2));
+
+        const tooltip = d3.select("#tooltip");
+
+        // Configuración del layout de árbol radial matemático
+        const tree = d3.tree()
+            .size([2 * Math.PI, radius])
+            .separation((a, b) => (a.parent == b.parent ? 1 : 2) / a.depth);
+
+        // Cargar los datos abiertos procesados desde el JSON generado por tu Python
+        d3.json("satelites_jerarquia.json").then(data => {
+            const root = d3.hierarchy(data);
+            root.x0 = 0;
+            root.y0 = 0;
+
+            // Colapsar inicialmente los nodos muy profundos para que la carga visual sea limpia
+            if (root.children) {
+                root.children.forEach(collapse);
+            }
+
+            actualizarArbol(root);
+
+            function collapse(d) {
+                if (d.children) {
+                    d._children = d.children;
+                    d._children.forEach(collapse);
+                    d.children = null;
+                }
+            }
+
+            function actualizarArbol(source) {
+                const datosArbol = tree(root);
+                const links = datosArbol.links();
+                const nodes = datosArbol.descendants();
+
+                // Normalizar la distancia entre anillos radiales fijando la profundidad geométrica
+                nodes.forEach(d => d.y = d.depth * (radius / 3));
+
+                // ------------------ SECCIÓN DE ENLACES (LINKS) ------------------
+                const link = svg.selectAll(".link")
+                    .data(links, d => d.target.id || (d.target.id = ++i));
+
+                // Dibujar curvas fluidas entre nodos imitando geometría hiperbólica
+                const linkEnter = link.enter().append("path")
+                    .attr("class", "link")
+                    .attr("d", d3.linkRadial()
+                        .angle(d => d.x)
+                        .radius(d => d.y));
+
+                const linkUpdate = linkEnter.merge(link);
+                linkUpdate.transition().duration(600)
+                    .attr("d", d3.linkRadial().angle(d => d.x).radius(d => d.y));
+
+                link.exit().remove();
+
+                // ------------------ SECCIÓN DE NODOS (NODES) ------------------
+                let i = 0;
+                const node = svg.selectAll(".node")
+                    .data(nodes, d => d.id || (d.id = ++i));
+
+                const nodeEnter = node.enter().append("g")
+                    .attr("class", d => `node ${d.children || d._children ? "node--internal" : "node--leaf"}`)
+                    .attr("transform", d => `rotate(${d.x * 180 / Math.PI - 90})translate(${d.y},0)`)
+                    .on("click", (event, d) => {
+                        // Comportamiento dinámico: expandir/colapsar al hacer clic (efecto foco dinámico)
+                        if (d.children) {
+                            d._children = d.children;
+                            d.children = null;
+                        } else {
+                            d.children = d._children;
+                            d._children = null;
+                        }
+                        actualizarArbol(d);
+                    })
+                    .on("mouseover", (event, d) => {
+                        // Tooltip interactivo con metadatos de nivel
+                        tooltip.style("opacity", 1)
+                               .html(`<strong>Nombre:</strong> ${d.data.name}<br>
+                                      <strong>Nivel estructural:</strong> Profundidad ${d.depth}`);
+                    })
+                    .on("mousemove", (event) => {
+                        tooltip.style("left", (event.pageX + 15) + "px")
+                               .style("top", (event.pageY - 15) + "px");
+                    })
+                    .on("mouseout", () => {
+                        tooltip.style("opacity", 0);
+                    });
+
+                nodeEnter.append("circle")
+                    .attr("r", d => d.children || d._children ? 5 : 2.5);
+
+                // Añadir etiquetas de texto únicamente a los nodos raíces e intermedios para evitar saturación
+                nodeEnter.filter(d => d.depth < 3).append("text")
+                    .attr("class", "text-label")
+                    .attr("dy", "0.31em")
+                    .attr("x", d => d.x < Math.PI ? 8 : -8)
+                    .attr("text-anchor", d => d.x < Math.PI ? "start" : "end")
+                    .attr("transform", d => d.x >= Math.PI ? "rotate(180)" : null)
+                    .text(d => d.data.name);
+
+                const nodeUpdate = nodeEnter.merge(node);
+
+                // Transición geométrica suavizada durante el reordenamiento del plano
+                nodeUpdate.transition().duration(600)
+                    .attr("transform", d => `rotate(${d.x * 180 / Math.PI - 90})translate(${d.y},0)`);
+
+                node.exit().remove();
+            }
+        }).catch(error => {
+            console.error("Error cargando el archivo jerárquico JSON:", error);
+            d3.select("#canvas-container").append("p")
+              .text("Error al renderizar el grafo. Verifica que 'satelites_jerarquia.json' está en el mismo directorio.");
+        });
+    </script>
+</body>
+</html>
